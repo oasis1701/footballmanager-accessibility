@@ -1,9 +1,14 @@
 using System;
+using System.Runtime.InteropServices;
 using UnityEngine;
+using UnityEngine.UIElements;
 using UnityEngine.InputSystem;
 using Il2CppInterop.Runtime.Attributes;
 using FM26Access.UI;
 using FM26Access.Navigation;
+using FM.UI;
+using SI.Bindable;
+using SI.UI;
 
 namespace FM26Access.Core;
 
@@ -15,6 +20,31 @@ public class AccessibilityManager : MonoBehaviour
 {
     // IL2CPP requires this constructor for injected types
     public AccessibilityManager(IntPtr ptr) : base(ptr) { }
+
+    // Windows API for mouse simulation
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
 
     public static AccessibilityManager Instance { get; private set; }
 
@@ -76,9 +106,29 @@ public class AccessibilityManager : MonoBehaviour
         bool ctrlPressed = keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed;
         bool shiftPressed = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
 
-        // NOTE: Navigation keys (arrows, Enter, Space) are now handled by the game's
-        // native FMNavigationManager. We piggyback on its focus system via FocusListener
-        // instead of implementing our own navigation. This avoids input conflicts.
+        // NOTE: Navigation keys (arrows) are handled by the game's native FMNavigationManager.
+        // We piggyback on its focus system via FocusListener.
+        // However, Enter/Space for activation doesn't work reliably on all elements
+        // (e.g., radio buttons in team selection), so we handle it manually.
+
+        // === ACTIVATION KEYS (Enter/Space for element activation) ===
+        // Primary: Enter key (without modifiers)
+        if (!ctrlPressed && !shiftPressed)
+        {
+            if (keyboard.enterKey.wasPressedThisFrame ||
+                keyboard.numpadEnterKey.wasPressedThisFrame)
+            {
+                Plugin.Log.LogInfo("Enter key detected - attempting activation");
+                TryActivateFocusedElement();
+            }
+        }
+
+        // Alternative: Ctrl+Space (in case Enter is consumed by the game)
+        if (ctrlPressed && !shiftPressed && keyboard.spaceKey.wasPressedThisFrame)
+        {
+            Plugin.Log.LogInfo("Ctrl+Space detected - attempting activation");
+            TryActivateFocusedElement();
+        }
 
         // === MODIFIER SHORTCUTS (mod-specific features) ===
 
@@ -187,6 +237,289 @@ public class AccessibilityManager : MonoBehaviour
                    "Control Shift H for help. " +
                    "Escape to stop speech.";
         NVDAOutput.Speak(help);
+    }
+
+    /// <summary>
+    /// Attempts to activate the currently focused element.
+    /// This handles cases where the game's native activation doesn't work
+    /// (e.g., radio buttons configured to only accept click events).
+    /// </summary>
+    [HideFromIl2Cpp]
+    private void TryActivateFocusedElement()
+    {
+        try
+        {
+            var focusListener = FocusListener.Instance;
+            if (focusListener == null)
+            {
+                Plugin.Log.LogInfo("TryActivateFocusedElement: FocusListener not available");
+                return;
+            }
+
+            var focused = focusListener.CurrentFocusedElement;
+            if (focused == null)
+            {
+                Plugin.Log.LogInfo("TryActivateFocusedElement: No element focused");
+                return;
+            }
+
+            var typeName = TextExtractor.GetIL2CppTypeName(focused);
+            Plugin.Log.LogInfo($"TryActivateFocusedElement: Focused element is {typeName}");
+
+            // Approach 1: Try dispatching a ClickEvent to the element
+            // This mimics what happens when the user clicks with mouse
+            if (TryDispatchClickEvent(focused))
+            {
+                return;
+            }
+
+            // Approach 2: Try to use NavigatableVisualElement's ClickedOrSubmitted delegate
+            var navigatable = focused.TryCast<NavigatableVisualElement>();
+            if (navigatable != null)
+            {
+                var clickDelegate = navigatable.m_elementClickedOrSubmitted;
+                if (clickDelegate != null)
+                {
+                    Plugin.Log.LogInfo("Invoking ClickedOrSubmitted delegate on NavigatableVisualElement");
+                    clickDelegate.Invoke(focused);
+                    NVDAOutput.Speak("Selected");
+                    return;
+                }
+                else
+                {
+                    Plugin.Log.LogInfo("NavigatableVisualElement found but delegate is null");
+                }
+            }
+
+            // Approach 3: Try to find and activate a radio button (fallback for other UI elements)
+            var radioButton = FindRadioButtonInElement(focused);
+            if (radioButton != null)
+            {
+                Plugin.Log.LogInfo($"Activating radio button via keyboard");
+                radioButton.OnClickedOrSubmitted(radioButton);
+                NVDAOutput.Speak("Selected");
+                return;
+            }
+
+            // If no activatable element found, log what we tried
+            Plugin.Log.LogInfo($"TryActivateFocusedElement: No activatable element found in {typeName}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogWarning($"TryActivateFocusedElement error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Attempts to activate the specified element by simulating a mouse click.
+    /// Uses Windows API to click at the element's screen position.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private bool TryDispatchClickEvent(VisualElement element)
+    {
+        var typeName = TextExtractor.GetIL2CppTypeName(element);
+
+        if (typeName == "TableRowNavigatable")
+        {
+            Plugin.Log.LogInfo("Element is TableRowNavigatable, attempting mouse click simulation");
+
+            var selectionCell = FindSelectionCellInChildren(element);
+            if (selectionCell != null)
+            {
+                try
+                {
+                    // Get the element's world bounds (in panel coordinates)
+                    var rect = selectionCell.worldBound;
+                    Plugin.Log.LogInfo($"SelectionCell worldBound: x={rect.x}, y={rect.y}, w={rect.width}, h={rect.height}");
+
+                    // Calculate center of the element in panel coordinates
+                    float centerX = rect.x + rect.width / 2;
+                    float centerY = rect.y + rect.height / 2;
+
+                    // Get the game window's screen position
+                    var hwnd = GetForegroundWindow();
+                    GetWindowRect(hwnd, out RECT windowRect);
+
+                    // Convert from panel coordinates to absolute screen coordinates
+                    int screenX = windowRect.Left + (int)centerX;
+                    int screenY = windowRect.Top + (int)centerY;
+
+                    Plugin.Log.LogInfo($"Window position: ({windowRect.Left}, {windowRect.Top})");
+                    Plugin.Log.LogInfo($"Panel coords: ({centerX}, {centerY})");
+                    Plugin.Log.LogInfo($"Simulating mouse click at screen position: ({screenX}, {screenY})");
+
+                    // Move cursor to position and click
+                    SetCursorPos(screenX, screenY);
+
+                    // Small delay to ensure cursor position is set
+                    System.Threading.Thread.Sleep(10);
+
+                    // Simulate left mouse click
+                    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+
+                    NVDAOutput.Speak("Selected");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.LogInfo($"Mouse click simulation failed: {ex.Message}");
+                }
+            }
+            else
+            {
+                Plugin.Log.LogInfo("No SelectionCell found in TableRowNavigatable");
+            }
+
+            return false;
+        }
+
+        Plugin.Log.LogInfo($"TryDispatchClickEvent: Element type {typeName} not handled");
+        return false;
+    }
+
+    /// <summary>
+    /// Logs all child element types for debugging purposes.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private void LogChildTypes(VisualElement parent, int depth)
+    {
+        if (parent == null || depth > 5) return; // Limit depth to avoid spam
+
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            var child = parent[i];
+            var childTypeName = TextExtractor.GetIL2CppTypeName(child);
+            var indent = new string(' ', depth * 2);
+            Plugin.Log.LogInfo($"{indent}Child[{i}]: {childTypeName} (name: {child.name})");
+
+            // Recurse into children
+            LogChildTypes(child, depth + 1);
+        }
+    }
+
+    /// <summary>
+    /// Recursively searches for a SelectionCell in the element's children.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private StreamedTable.SelectionCell FindSelectionCellInChildren(VisualElement parent)
+    {
+        if (parent == null) return null;
+
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            var child = parent[i];
+            var childTypeName = TextExtractor.GetIL2CppTypeName(child);
+
+            if (childTypeName == "SelectionCell" || childTypeName.Contains("SelectionCell"))
+            {
+                Plugin.Log.LogInfo($"Found SelectionCell at depth, attempting cast");
+                var cell = child.TryCast<StreamedTable.SelectionCell>();
+                if (cell != null) return cell;
+            }
+
+            // Recursive search
+            var found = FindSelectionCellInChildren(child);
+            if (found != null) return found;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Recursively searches for a Toggle element in the element's children.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private Toggle FindToggleInChildren(VisualElement parent)
+    {
+        if (parent == null) return null;
+
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            var child = parent[i];
+            var childTypeName = TextExtractor.GetIL2CppTypeName(child);
+
+            if (childTypeName.Contains("Toggle") || childTypeName.Contains("BaseField"))
+            {
+                Plugin.Log.LogInfo($"Found potential toggle element: {childTypeName}");
+                var toggle = child.TryCast<Toggle>();
+                if (toggle != null) return toggle;
+            }
+
+            // Recursive search
+            var found = FindToggleInChildren(child);
+            if (found != null) return found;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Finds an SIRadioButton in the element or its descendants.
+    /// Handles both direct radio buttons and table rows containing radio buttons.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private SIRadioButton FindRadioButtonInElement(VisualElement element)
+    {
+        if (element == null)
+            return null;
+
+        // Check if element itself is a radio button
+        var typeName = TextExtractor.GetIL2CppTypeName(element);
+        if (typeName.Contains("SIRadioButton"))
+        {
+            return element.TryCast<SIRadioButton>();
+        }
+
+        // If it's a table row or any container, search children recursively
+        return FindRadioButtonInChildren(element);
+    }
+
+    /// <summary>
+    /// Recursively searches for an SIRadioButton in the element's children.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private SIRadioButton FindRadioButtonInChildren(VisualElement element)
+    {
+        if (element == null)
+            return null;
+
+        for (int i = 0; i < element.childCount; i++)
+        {
+            var child = element[i];
+
+            var typeName = TextExtractor.GetIL2CppTypeName(child);
+            if (typeName.Contains("SIRadioButton"))
+            {
+                return child.TryCast<SIRadioButton>();
+            }
+
+            // Recursively search children
+            var found = FindRadioButtonInChildren(child);
+            if (found != null)
+                return found;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Finds the parent StreamedTable by traversing up the visual tree.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private StreamedTable FindParentStreamedTable(VisualElement element)
+    {
+        var current = element.parent;
+        while (current != null)
+        {
+            var typeName = TextExtractor.GetIL2CppTypeName(current);
+            if (typeName == "StreamedTable" || typeName.Contains("StreamedTable"))
+            {
+                return current.TryCast<StreamedTable>();
+            }
+            current = current.parent;
+        }
+        return null;
     }
 
     [HideFromIl2Cpp]

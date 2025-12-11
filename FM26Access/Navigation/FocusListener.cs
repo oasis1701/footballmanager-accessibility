@@ -26,6 +26,12 @@ public class FocusListener : MonoBehaviour
     private float _lastAnnouncementTime;
     private const float AnnouncementDebounce = 0.05f; // 50ms debounce
 
+    /// <summary>
+    /// Gets the currently focused element tracked by this listener.
+    /// Used by AccessibilityManager to activate elements on Enter key.
+    /// </summary>
+    public VisualElement CurrentFocusedElement => _lastFocusedElement;
+
     // Table row tracking to avoid re-announcing same row on cell navigation
     private VisualElement _lastAnnouncedTableRow;
     private int _lastAnnouncedRowIndex = -1;

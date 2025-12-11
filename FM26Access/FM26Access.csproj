@@ -75,6 +75,10 @@
       <Private>false</Private>
     </Reference>
     <!-- FM26 SI UI Framework -->
+    <Reference Include="SI.Core">
+      <HintPath>$(BepInExPath)\interop\SI.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="SI.UI">
       <HintPath>$(BepInExPath)\interop\SI.UI.dll</HintPath>
       <Private>false</Private>
