@@ -1,0 +1,22 @@
+# User-specified exclusions
+CLAUDE.md
+decompiled/
+
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Claude Code local settings
+.claude/
+
+# Debug output
+UIDiscovery.txt
+
+# Misc
+nul
+*.log
