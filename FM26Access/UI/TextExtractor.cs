@@ -443,24 +443,35 @@ public static class TextExtractor
 
         try
         {
+            string rawValue = null;
+
             // Standard Unity DropdownField
             if (element is DropdownField dropdown)
-                return dropdown.value ?? "";
-
-            // Try getting value property via reflection
-            var type = element.GetType();
-            var prop = type.GetProperty("value");
-            if (prop != null)
+                rawValue = dropdown.value;
+            else
             {
-                var val = prop.GetValue(element);
-                if (val != null)
-                    return val.ToString();
+                // Try getting value property via reflection
+                var type = element.GetType();
+                var prop = type.GetProperty("value");
+                if (prop != null)
+                {
+                    var val = prop.GetValue(element);
+                    if (val != null)
+                        rawValue = val.ToString();
+                }
+
+                // Try text property for SI dropdowns (shows selected text)
+                if (string.IsNullOrEmpty(rawValue))
+                {
+                    var textEl = element.Q<TextElement>();
+                    if (textEl != null && !string.IsNullOrWhiteSpace(textEl.text))
+                        rawValue = textEl.text;
+                }
             }
 
-            // Try text property for SI dropdowns (shows selected text)
-            var textEl = element.Q<TextElement>();
-            if (textEl != null && !string.IsNullOrWhiteSpace(textEl.text))
-                return textEl.text;
+            // Strip Rich Text tags (color, link, style, etc.) before returning
+            if (!string.IsNullOrEmpty(rawValue))
+                return StripRichTextTags(rawValue);
         }
         catch { }
 
@@ -493,20 +504,23 @@ public static class TextExtractor
     }
 
     /// <summary>
-    /// Cleans raw text by trimming and removing excessive whitespace.
+    /// Cleans raw text by stripping Rich Text tags, trimming and removing excessive whitespace.
     /// </summary>
     [HideFromIl2Cpp]
     private static string CleanText(string text)
     {
         if (string.IsNullOrEmpty(text)) return "";
 
-        // Trim, normalize whitespace, remove newlines for speech
-        return text
-            .Trim()
+        // Strip Rich Text tags first, then normalize whitespace
+        var stripped = StripRichTextTags(text);
+
+        // Normalize whitespace, remove newlines for speech
+        return stripped
             .Replace("\r\n", " ")
             .Replace("\n", " ")
             .Replace("\r", " ")
-            .Replace("  ", " ");
+            .Replace("  ", " ")
+            .Trim();
     }
 
     /// <summary>
