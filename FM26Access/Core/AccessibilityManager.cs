@@ -311,7 +311,8 @@ public class AccessibilityManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Simulates a mouse click on TableRowNavigatable elements (e.g., team selection).
+    /// Activates TableRowNavigatable elements by calling OnNavigationSubmit directly.
+    /// This bypasses SelectionCell callbacks which have null reference issues.
     /// </summary>
     [HideFromIl2Cpp]
     private bool TryDispatchClickEvent(VisualElement element)
@@ -320,54 +321,31 @@ public class AccessibilityManager : MonoBehaviour
 
         if (typeName == "TableRowNavigatable")
         {
-            Plugin.Log.LogInfo("Element is TableRowNavigatable, attempting mouse click simulation");
+            Plugin.Log.LogInfo("Element is TableRowNavigatable, calling OnNavigationSubmit");
 
-            var selectionCell = FindSelectionCellInChildren(element);
-            if (selectionCell != null)
+            try
             {
-                try
+                // Cast to TableRowNavigatable and call OnNavigationSubmit directly
+                var tableRow = element.TryCast<TableRowNavigatable>();
+                if (tableRow != null)
                 {
-                    // Get the element's world bounds (in panel coordinates)
-                    var rect = selectionCell.worldBound;
-                    Plugin.Log.LogInfo($"SelectionCell worldBound: x={rect.x}, y={rect.y}, w={rect.width}, h={rect.height}");
+                    var submitEvent = NavigationSubmitEvent.GetPooled();
+                    submitEvent.target = element.TryCast<IEventHandler>();
 
-                    // Calculate center of the element in panel coordinates
-                    float centerX = rect.x + rect.width / 2;
-                    float centerY = rect.y + rect.height / 2;
-
-                    // Get the game window's screen position
-                    var hwnd = GetForegroundWindow();
-                    GetWindowRect(hwnd, out RECT windowRect);
-
-                    // Convert from panel coordinates to absolute screen coordinates
-                    int screenX = windowRect.Left + (int)centerX;
-                    int screenY = windowRect.Top + (int)centerY;
-
-                    Plugin.Log.LogInfo($"Window position: ({windowRect.Left}, {windowRect.Top})");
-                    Plugin.Log.LogInfo($"Panel coords: ({centerX}, {centerY})");
-                    Plugin.Log.LogInfo($"Simulating mouse click at screen position: ({screenX}, {screenY})");
-
-                    // Move cursor to position and click
-                    SetCursorPos(screenX, screenY);
-
-                    // Small delay to ensure cursor position is set
-                    System.Threading.Thread.Sleep(10);
-
-                    // Simulate left mouse click
-                    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                    tableRow.OnNavigationSubmit(submitEvent);
+                    submitEvent.Dispose();
 
                     NVDAOutput.Speak("Selected");
                     return true;
                 }
-                catch (Exception ex)
+                else
                 {
-                    Plugin.Log.LogInfo($"Mouse click simulation failed: {ex.Message}");
+                    Plugin.Log.LogInfo("Failed to cast to TableRowNavigatable");
                 }
             }
-            else
+            catch (Exception ex)
             {
-                Plugin.Log.LogInfo("No SelectionCell found in TableRowNavigatable");
+                Plugin.Log.LogInfo($"OnNavigationSubmit failed: {ex.Message}");
             }
 
             return false;
