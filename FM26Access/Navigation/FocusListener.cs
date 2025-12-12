@@ -234,6 +234,10 @@ public class FocusListener : MonoBehaviour
             return "dropdown";
         if (typeName.Contains("SITextField") || typeName.Contains("SITextInput"))
             return "text field";
+        if (typeName.Contains("BindableTextEditBox"))
+            return "text field";
+        if (typeName.Contains("DateSelectorWidget"))
+            return "date picker";
         if (typeName.Contains("Link") || element.ClassListContains("link"))
             return "link";
 

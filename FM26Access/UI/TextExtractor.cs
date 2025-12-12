@@ -56,6 +56,27 @@ public static class TextExtractor
             if (!string.IsNullOrWhiteSpace(childText))
                 return CleanText(childText);
 
+            // 3.5. FORM FIELD LABELS (for text inputs, date pickers, navigatable elements)
+            if (typeName.Contains("BindableTextEditBox") ||
+                typeName.Contains("DateSelectorWidget") ||
+                typeName.Contains("NavigatableVisualElement") ||
+                typeName.Contains("SITextField") ||
+                typeName.Contains("SITextInput") ||
+                element is TextField)
+            {
+                var formLabel = FindFormFieldLabel(element);
+                if (!string.IsNullOrWhiteSpace(formLabel))
+                    return formLabel;
+            }
+
+            // 3.6. BUTTONS WITHOUT LABELS (find adjacent descriptive text)
+            if (typeName.Contains("SIButton") || element is Button)
+            {
+                var formLabel = FindFormFieldLabel(element);
+                if (!string.IsNullOrWhiteSpace(formLabel))
+                    return formLabel;
+            }
+
             // 4. SIBLING CONTEXT (for checkboxes/toggles without direct labels)
             if (typeName.Contains("SICheckBox") || typeName.Contains("SICheckbox") || element is Toggle)
             {
@@ -952,5 +973,127 @@ public static class TextExtractor
             .Replace("Your Choice Regarding ", "")
             .Replace("Our ", "")
             .Trim();
+    }
+
+    /// <summary>
+    /// Finds the label text associated with a form field (text input, date picker, etc.)
+    /// by searching adjacent siblings in the visual hierarchy.
+    /// Searches ONLY at depth 1-2 to avoid finding labels from unrelated fields.
+    /// </summary>
+    [HideFromIl2Cpp]
+    public static string FindFormFieldLabel(VisualElement element)
+    {
+        if (element == null) return "";
+
+        try
+        {
+            var current = element;
+            int depth = 0;
+            const int maxDepth = 2;  // Only search 1-2 levels (immediate context)
+
+            while (current != null && depth < maxDepth)
+            {
+                depth++;
+
+                var parent = current.parent;
+                if (parent == null)
+                {
+                    current = null;
+                    continue;
+                }
+
+                // Find index of current element in parent
+                int currentIndex = -1;
+                for (int i = 0; i < parent.childCount; i++)
+                {
+                    if (parent[i] == current)
+                    {
+                        currentIndex = i;
+                        break;
+                    }
+                }
+
+                // At depth 1, check FOLLOWING siblings first (for radio buttons with label on right)
+                // Only check 1-2 following siblings to stay close
+                if (depth == 1)
+                {
+                    for (int i = currentIndex + 1; i < parent.childCount && i <= currentIndex + 2; i++)
+                    {
+                        var label = ExtractLabelFromSibling(parent[i]);
+                        if (!string.IsNullOrWhiteSpace(label))
+                            return label;
+                    }
+                }
+
+                // Search PRECEDING siblings (closest first, limit to 2 siblings)
+                int searchLimit = Math.Max(0, currentIndex - 2);
+                for (int i = currentIndex - 1; i >= searchLimit; i--)
+                {
+                    var label = ExtractLabelFromSibling(parent[i]);
+                    if (!string.IsNullOrWhiteSpace(label))
+                        return label;
+                }
+
+                // Move up to parent for next iteration
+                current = parent;
+            }
+        }
+        catch { }
+
+        return "";
+    }
+
+    /// <summary>
+    /// Extracts label text from a sibling element if it matches form label criteria.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private static string ExtractLabelFromSibling(VisualElement sibling)
+    {
+        if (sibling == null) return "";
+
+        // Skip invisible siblings
+        if (!sibling.visible ||
+            sibling.resolvedStyle.display == DisplayStyle.None)
+            return "";
+
+        // Query all text elements in sibling
+        var allTexts = sibling.Query<TextElement>(name: (string)null, className: (string)null).ToList();
+
+        foreach (var textEl in allTexts)
+        {
+            var text = textEl.text?.Trim();
+
+            // Form label criteria:
+            // - Not empty
+            // - Length between 2 and 50 characters (typical form labels)
+            // - Does not end with ":" (section headers like "Optional:")
+            // - Does not contain sentence periods (allow "..." ellipsis)
+            // - Does not look like internal name
+            if (!string.IsNullOrWhiteSpace(text) &&
+                text.Length >= 2 &&
+                text.Length <= 50 &&
+                !text.EndsWith(":") &&
+                !ContainsSentencePeriod(text) &&
+                !IsInternalName(text))
+            {
+                return CleanText(text);
+            }
+        }
+
+        return "";
+    }
+
+    /// <summary>
+    /// Checks if text contains a sentence period (but allows "..." ellipsis).
+    /// Used to filter out sentences/descriptions while allowing labels like "I was born on..."
+    /// </summary>
+    [HideFromIl2Cpp]
+    private static bool ContainsSentencePeriod(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+
+        // Remove ellipsis patterns, then check for remaining periods
+        var withoutEllipsis = text.Replace("...", "").Replace("…", "");
+        return withoutEllipsis.Contains(".");
     }
 }
