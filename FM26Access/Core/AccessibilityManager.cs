@@ -21,7 +21,7 @@ public class AccessibilityManager : MonoBehaviour
     // IL2CPP requires this constructor for injected types
     public AccessibilityManager(IntPtr ptr) : base(ptr) { }
 
-    // Windows API for mouse simulation
+    // Windows API for mouse click simulation
     [DllImport("user32.dll")]
     private static extern bool SetCursorPos(int X, int Y);
 
@@ -311,8 +311,7 @@ public class AccessibilityManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Attempts to activate the specified element by simulating a mouse click.
-    /// Uses Windows API to click at the element's screen position.
+    /// Simulates a mouse click on TableRowNavigatable elements (e.g., team selection).
     /// </summary>
     [HideFromIl2Cpp]
     private bool TryDispatchClickEvent(VisualElement element)
@@ -379,26 +378,6 @@ public class AccessibilityManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Logs all child element types for debugging purposes.
-    /// </summary>
-    [HideFromIl2Cpp]
-    private void LogChildTypes(VisualElement parent, int depth)
-    {
-        if (parent == null || depth > 5) return; // Limit depth to avoid spam
-
-        for (int i = 0; i < parent.childCount; i++)
-        {
-            var child = parent[i];
-            var childTypeName = TextExtractor.GetIL2CppTypeName(child);
-            var indent = new string(' ', depth * 2);
-            Plugin.Log.LogInfo($"{indent}Child[{i}]: {childTypeName} (name: {child.name})");
-
-            // Recurse into children
-            LogChildTypes(child, depth + 1);
-        }
-    }
-
-    /// <summary>
     /// Recursively searches for a SelectionCell in the element's children.
     /// </summary>
     [HideFromIl2Cpp]
@@ -420,34 +399,6 @@ public class AccessibilityManager : MonoBehaviour
 
             // Recursive search
             var found = FindSelectionCellInChildren(child);
-            if (found != null) return found;
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Recursively searches for a Toggle element in the element's children.
-    /// </summary>
-    [HideFromIl2Cpp]
-    private Toggle FindToggleInChildren(VisualElement parent)
-    {
-        if (parent == null) return null;
-
-        for (int i = 0; i < parent.childCount; i++)
-        {
-            var child = parent[i];
-            var childTypeName = TextExtractor.GetIL2CppTypeName(child);
-
-            if (childTypeName.Contains("Toggle") || childTypeName.Contains("BaseField"))
-            {
-                Plugin.Log.LogInfo($"Found potential toggle element: {childTypeName}");
-                var toggle = child.TryCast<Toggle>();
-                if (toggle != null) return toggle;
-            }
-
-            // Recursive search
-            var found = FindToggleInChildren(child);
             if (found != null) return found;
         }
 
@@ -500,25 +451,6 @@ public class AccessibilityManager : MonoBehaviour
                 return found;
         }
 
-        return null;
-    }
-
-    /// <summary>
-    /// Finds the parent StreamedTable by traversing up the visual tree.
-    /// </summary>
-    [HideFromIl2Cpp]
-    private StreamedTable FindParentStreamedTable(VisualElement element)
-    {
-        var current = element.parent;
-        while (current != null)
-        {
-            var typeName = TextExtractor.GetIL2CppTypeName(current);
-            if (typeName == "StreamedTable" || typeName.Contains("StreamedTable"))
-            {
-                return current.TryCast<StreamedTable>();
-            }
-            current = current.parent;
-        }
         return null;
     }
 
