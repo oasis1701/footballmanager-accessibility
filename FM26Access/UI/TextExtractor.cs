@@ -978,7 +978,7 @@ public static class TextExtractor
     /// <summary>
     /// Finds the label text associated with a form field (text input, date picker, etc.)
     /// by searching adjacent siblings in the visual hierarchy.
-    /// Searches ONLY at depth 1-2 to avoid finding labels from unrelated fields.
+    /// Searches up to 4 levels deep and 5 siblings in each direction.
     /// </summary>
     [HideFromIl2Cpp]
     public static string FindFormFieldLabel(VisualElement element)
@@ -989,7 +989,8 @@ public static class TextExtractor
         {
             var current = element;
             int depth = 0;
-            const int maxDepth = 2;  // Only search 1-2 levels (immediate context)
+            const int maxDepth = 4;      // Search up to 4 levels in hierarchy
+            const int maxSiblings = 5;   // Search up to 5 siblings in each direction
 
             while (current != null && depth < maxDepth)
             {
@@ -1013,21 +1014,18 @@ public static class TextExtractor
                     }
                 }
 
-                // At depth 1, check FOLLOWING siblings first (for radio buttons with label on right)
-                // Only check 1-2 following siblings to stay close
-                if (depth == 1)
+                // Check FOLLOWING siblings at ALL depths (for labels on right side)
+                int followingLimit = Math.Min(parent.childCount, currentIndex + maxSiblings + 1);
+                for (int i = currentIndex + 1; i < followingLimit; i++)
                 {
-                    for (int i = currentIndex + 1; i < parent.childCount && i <= currentIndex + 2; i++)
-                    {
-                        var label = ExtractLabelFromSibling(parent[i]);
-                        if (!string.IsNullOrWhiteSpace(label))
-                            return label;
-                    }
+                    var label = ExtractLabelFromSibling(parent[i]);
+                    if (!string.IsNullOrWhiteSpace(label))
+                        return label;
                 }
 
-                // Search PRECEDING siblings (closest first, limit to 2 siblings)
-                int searchLimit = Math.Max(0, currentIndex - 2);
-                for (int i = currentIndex - 1; i >= searchLimit; i--)
+                // Search PRECEDING siblings (closest first)
+                int precedingLimit = Math.Max(0, currentIndex - maxSiblings);
+                for (int i = currentIndex - 1; i >= precedingLimit; i--)
                 {
                     var label = ExtractLabelFromSibling(parent[i]);
                     if (!string.IsNullOrWhiteSpace(label))
@@ -1044,7 +1042,8 @@ public static class TextExtractor
     }
 
     /// <summary>
-    /// Extracts label text from a sibling element if it matches form label criteria.
+    /// Extracts label text from a sibling element.
+    /// Simplified: only checks for non-empty text with reasonable length.
     /// </summary>
     [HideFromIl2Cpp]
     private static string ExtractLabelFromSibling(VisualElement sibling)
@@ -1063,18 +1062,10 @@ public static class TextExtractor
         {
             var text = textEl.text?.Trim();
 
-            // Form label criteria:
-            // - Not empty
-            // - Length between 2 and 50 characters (typical form labels)
-            // - Does not end with ":" (section headers like "Optional:")
-            // - Does not contain sentence periods (allow "..." ellipsis)
-            // - Does not look like internal name
+            // Simplified criteria: just check for reasonable text
             if (!string.IsNullOrWhiteSpace(text) &&
                 text.Length >= 2 &&
-                text.Length <= 50 &&
-                !text.EndsWith(":") &&
-                !ContainsSentencePeriod(text) &&
-                !IsInternalName(text))
+                text.Length <= 100)
             {
                 return CleanText(text);
             }
