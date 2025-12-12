@@ -5,6 +5,7 @@ using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.Attributes;
 using UnityEngine.UIElements;
 using SI.Bindable;
+using FM26Access.Patches;
 
 namespace FM26Access.UI;
 
@@ -14,6 +15,258 @@ namespace FM26Access.UI;
 /// </summary>
 public static class TextExtractor
 {
+    // Cache for BindingRoot lookups to avoid repeated traversals
+    private static readonly System.Collections.Generic.Dictionary<IntPtr, VisualElement> _bindingRootCache = new();
+    private static DateTime _lastCacheClear = DateTime.Now;
+    private const int CACHE_LIFETIME_SECONDS = 30;
+
+    /// <summary>
+    /// Finds the nearest BindingRoot or AsyncBindingRoot ancestor.
+    /// BindingRoot elements group semantically related UI content in FM26's binding system.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private static VisualElement FindBindingRoot(VisualElement element)
+    {
+        if (element == null) return null;
+
+        // Check cache first (with periodic clearing)
+        if ((DateTime.Now - _lastCacheClear).TotalSeconds > CACHE_LIFETIME_SECONDS)
+        {
+            _bindingRootCache.Clear();
+            _lastCacheClear = DateTime.Now;
+        }
+
+        var elementPtr = element.Pointer;
+        if (_bindingRootCache.TryGetValue(elementPtr, out var cached))
+            return cached;
+
+        var current = element.parent;
+        int depth = 0;
+        const int maxDepth = 30;
+
+        while (current != null && depth < maxDepth)
+        {
+            var typeName = GetIL2CppTypeName(current);
+            if (typeName.Contains("BindingRoot") || typeName.Contains("AsyncBindingRoot"))
+            {
+                _bindingRootCache[elementPtr] = current;
+                return current;
+            }
+            current = current.parent;
+            depth++;
+        }
+
+        // Cache null result too
+        _bindingRootCache[elementPtr] = null;
+        return null;
+    }
+
+    /// <summary>
+    /// Finds label text by looking for elements with semantic names within a BindingRoot.
+    /// FM26 uses names like "desc", "label", "text" for label elements.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private static string FindLabelBySemanticName(VisualElement bindingRoot, VisualElement exclude)
+    {
+        if (bindingRoot == null) return "";
+
+        try
+        {
+            // Priority 1: Element named "desc" (common in FM26 UI)
+            var descText = bindingRoot.Q<TextElement>(name: "desc", className: (string)null);
+            if (descText != null && descText != exclude && !string.IsNullOrWhiteSpace(descText.text))
+                return descText.text;
+
+            // Priority 2: Element named "label" or "title"
+            foreach (var name in new[] { "label", "title", "text", "description" })
+            {
+                var labelEl = bindingRoot.Q<TextElement>(name: name, className: (string)null);
+                if (labelEl != null && labelEl != exclude && !string.IsNullOrWhiteSpace(labelEl.text))
+                    return labelEl.text;
+            }
+
+            // Priority 3: Any SIText element within the BindingRoot
+            var allTexts = bindingRoot.Query<TextElement>(name: (string)null, className: (string)null).ToList();
+            foreach (var textEl in allTexts)
+            {
+                // Skip the element we're trying to find a label for
+                if (textEl == exclude) continue;
+
+                // Check if this is an SIText element
+                var typeName = GetIL2CppTypeName(textEl);
+                if (typeName.Contains("SIText"))
+                {
+                    var text = textEl.text?.Trim();
+                    if (!string.IsNullOrWhiteSpace(text) && text.Length > 1 && text.Length < 200)
+                        return text;
+                }
+            }
+        }
+        catch { }
+
+        return "";
+    }
+
+    /// <summary>
+    /// Searches within a BindingRoot for label text, using the semantic structure.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private static string FindLabelWithinBindingRoot(VisualElement element)
+    {
+        var bindingRoot = FindBindingRoot(element);
+        if (bindingRoot == null) return "";
+
+        return FindLabelBySemanticName(bindingRoot, element);
+    }
+
+    /// <summary>
+    /// Finds section header that appears above an element in the hierarchy.
+    /// Looks for text ending with "..." or ":" in preceding siblings.
+    /// Returns ONLY the first header found - stops immediately.
+    /// </summary>
+    [HideFromIl2Cpp]
+    public static string FindSectionContext(VisualElement element)
+    {
+        if (element == null) return "";
+
+        try
+        {
+            var current = element.parent;
+            int depth = 0;
+            const int maxDepth = 8; // Need 8 levels to find headers like "I was born on..."
+
+            while (current != null && depth < maxDepth)
+            {
+                depth++;
+
+                // Look for text elements in siblings that come BEFORE the current element's subtree
+                var parent = current.parent;
+                if (parent != null)
+                {
+                    // Find index of current element in parent
+                    int currentIndex = -1;
+                    for (int i = 0; i < parent.childCount; i++)
+                    {
+                        if (parent[i] == current)
+                        {
+                            currentIndex = i;
+                            break;
+                        }
+                    }
+
+                    // Search siblings BEFORE current (closest first, going backwards)
+                    for (int i = currentIndex - 1; i >= 0; i--)
+                    {
+                        var sibling = parent[i];
+                        var header = ExtractSectionHeaderFromElement(sibling);
+                        if (!string.IsNullOrWhiteSpace(header))
+                        {
+                            // Found a header - return immediately, don't keep searching
+                            return header;
+                        }
+                    }
+                }
+
+                current = parent;
+            }
+
+            return "";
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogDebug($"FindSectionContext failed: {ex.Message}");
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// Extracts section header text from an element if it looks like a header.
+    /// Headers end with "..." or ":" and are short (< 100 chars).
+    /// Only returns the FIRST header found - no description gathering.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private static string ExtractSectionHeaderFromElement(VisualElement element)
+    {
+        if (element == null) return "";
+
+        try
+        {
+            // Get all text elements
+            var allTexts = element.Query<TextElement>(name: (string)null, className: (string)null).ToList();
+
+            foreach (var textEl in allTexts)
+            {
+                var text = textEl.text?.Trim();
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                // Skip very long text (not a header)
+                if (text.Length > 100) continue;
+
+                // Skip very short text (probably not meaningful)
+                if (text.Length < 3) continue;
+
+                // Check if it looks like a section header
+                if (text.EndsWith("...") || text.EndsWith(":"))
+                {
+                    return CleanText(text);
+                }
+            }
+
+            // Also check if the element itself is a TextElement
+            if (element is TextElement te)
+            {
+                var text = te.text?.Trim();
+                if (!string.IsNullOrWhiteSpace(text) && text.Length >= 3 && text.Length <= 100)
+                {
+                    if (text.EndsWith("...") || text.EndsWith(":"))
+                    {
+                        return CleanText(text);
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return "";
+    }
+
+    /// <summary>
+    /// Extracts description text from an element (text that follows a header).
+    /// Description text is short (< 150 chars) and doesn't look like a header.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private static string ExtractDescriptionText(VisualElement element)
+    {
+        if (element == null) return "";
+
+        try
+        {
+            // Get all text elements
+            var allTexts = element.Query<TextElement>(name: (string)null, className: (string)null).ToList();
+
+            foreach (var textEl in allTexts)
+            {
+                var text = textEl.text?.Trim();
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                // Skip if it looks like a header (ends with : or ...)
+                if (text.EndsWith("...") || text.EndsWith(":")) continue;
+
+                // Skip very long text
+                if (text.Length > 150) continue;
+
+                // Skip very short text
+                if (text.Length < 5) continue;
+
+                // This looks like description text
+                return CleanText(text);
+            }
+        }
+        catch { }
+
+        return "";
+    }
+
     /// <summary>
     /// Extracts human-readable text from any VisualElement.
     /// Handles SI custom elements, localized text, and standard Unity UI.
@@ -42,6 +295,11 @@ public static class TextExtractor
                 if (!string.IsNullOrWhiteSpace(text))
                     return CleanText(text);
             }
+
+            // NOTE: BindingRoot search removed from here - it was too aggressive
+            // and found unrelated text like "jump to top" from scroll controls.
+            // BindingRoot search is still used in FindFormFieldLabel and FindCheckboxLabel
+            // as a targeted first attempt for those specific element types.
 
             // 2. DIRECT TEXT ELEMENT (for labels, plain text, etc.)
             if (element is TextElement textEl)
@@ -104,13 +362,20 @@ public static class TextExtractor
 
     /// <summary>
     /// Tries to get text from SIButton.m_staticText field.
-    /// Note: StaticText property only has a setter in IL2CPP, so we use the field directly.
+    /// First checks the Harmony patch cache for intercepted binding values,
+    /// then falls back to reading the field directly.
     /// </summary>
     [HideFromIl2Cpp]
     private static string TryGetSIButtonText(VisualElement element)
     {
         try
         {
+            // Priority 1: Check Harmony patch cache (may have intercepted binding value)
+            var cachedLabel = SIButtonTextPatch.GetCachedLabel(element);
+            if (!string.IsNullOrWhiteSpace(cachedLabel))
+                return cachedLabel;
+
+            // Priority 2: Read directly from the field
             var siButton = element.TryCast<SIButton>();
             if (siButton != null)
             {
@@ -227,6 +492,10 @@ public static class TextExtractor
 
         try
         {
+            // NOTE: BindingRoot search removed - it was too aggressive and found
+            // unrelated text like "jump to top" from scroll controls.
+            // Original sibling search works better for checkbox labels.
+
             // Walk up the tree looking for text
             var current = checkbox.parent;
             int depth = 0;
@@ -978,7 +1247,6 @@ public static class TextExtractor
     /// <summary>
     /// Finds the label text associated with a form field (text input, date picker, etc.)
     /// by searching adjacent siblings in the visual hierarchy.
-    /// Searches up to 4 levels deep and 5 siblings in each direction.
     /// </summary>
     [HideFromIl2Cpp]
     public static string FindFormFieldLabel(VisualElement element)
@@ -987,6 +1255,10 @@ public static class TextExtractor
 
         try
         {
+            // NOTE: BindingRoot search removed - it was too aggressive and found
+            // unrelated text like "jump to top" from scroll controls.
+            // Original sibling search works better for form field labels.
+
             var current = element;
             int depth = 0;
             const int maxDepth = 4;      // Search up to 4 levels in hierarchy

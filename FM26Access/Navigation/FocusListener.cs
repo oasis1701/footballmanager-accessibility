@@ -33,8 +33,8 @@ public class FocusListener : MonoBehaviour
     public VisualElement CurrentFocusedElement => _lastFocusedElement;
 
     // Table row tracking to avoid re-announcing same row on cell navigation
-    private VisualElement _lastAnnouncedTableRow;
-    private int _lastAnnouncedRowIndex = -1;
+    // Use content-based comparison instead of index (virtualized lists reuse indexes)
+    private string _lastAnnouncedRowContent = "";
     private IntPtr _lastAnnouncedTablePtr = IntPtr.Zero;
 
     public void Awake()
@@ -168,14 +168,16 @@ public class FocusListener : MonoBehaviour
         var elementType = GetElementTypeName(element, typeName);
         var state = GetElementState(element);
 
-        // Only get section header for certain element types (dropdowns, checkboxes)
-        // Buttons typically have their own descriptive labels and don't need section context
+        // Get section context (headers like "I was born on..." or "Optional:")
+        // Only for element types that benefit from it
         string section = "";
         if (typeName.Contains("SIDropdown") ||
             typeName.Contains("SICheckBox", StringComparison.OrdinalIgnoreCase) ||
-            element is Toggle || element is DropdownField)
+            typeName.Contains("DateSelector") ||
+            typeName.Contains("SIButton") ||
+            element is Toggle || element is DropdownField || element is Button)
         {
-            section = TextExtractor.FindSectionHeader(element);
+            section = TextExtractor.FindSectionContext(element);
         }
 
         // Update tracked state
@@ -294,45 +296,45 @@ public class FocusListener : MonoBehaviour
 
     /// <summary>
     /// Announces a table row with all cell data.
-    /// Tracks row to avoid re-announcing same row on cell navigation.
+    /// Uses content-based tracking to avoid re-announcing same row on cell navigation.
+    /// This correctly handles virtualized lists where visual slot indexes are reused.
     /// </summary>
     [HideFromIl2Cpp]
     private void AnnounceTableRow(VisualElement tableRow, VisualElement focusedCell)
     {
         try
         {
-            // Get row identification info
-            int rowIndex = GetTableRowIndex(tableRow);
             IntPtr tablePtr = GetTableParentPointer(tableRow);
 
-            // Check if we're still on the same row (e.g., left/right navigation between cells)
-            if (IsSameRow(tableRow, rowIndex, tablePtr))
-            {
-                Plugin.Log.LogDebug($"Same row {rowIndex}, skipping re-announce");
-                return;
-            }
-
-            // Extract full row data
+            // Extract row data first (needed for content-based comparison)
             var rowData = TextExtractor.ExtractTableRowData(tableRow);
 
+            // Handle empty row data - fall back to cell text
             if (string.IsNullOrWhiteSpace(rowData))
             {
-                // Fallback: announce focused cell only
                 var cellText = TextExtractor.StripRichTextTags(TextExtractor.ExtractText(focusedCell));
-                if (!string.IsNullOrWhiteSpace(cellText))
-                {
-                    Plugin.Log.LogInfo($"Table row (empty), cell: {cellText}");
-                    NVDAOutput.Speak(cellText);
-                }
+                if (string.IsNullOrWhiteSpace(cellText))
+                    return;
+
+                // Use cell text as content for comparison
+                rowData = cellText;
+            }
+
+            // Check if same content (different table = different content even if same text)
+            // This correctly handles virtualized lists where the same visual slot shows different data
+            if (tablePtr == _lastAnnouncedTablePtr && rowData == _lastAnnouncedRowContent)
+            {
+                Plugin.Log.LogDebug($"Same row content, skipping re-announce");
                 return;
             }
 
             // Update tracking
-            _lastAnnouncedTableRow = tableRow;
-            _lastAnnouncedRowIndex = rowIndex;
+            _lastAnnouncedRowContent = rowData;
             _lastAnnouncedTablePtr = tablePtr;
 
-            // Add row position context if available
+            // Get row index for display only (not for identity)
+            int rowIndex = GetTableRowIndex(tableRow);
+
             string announcement = rowData;
             if (rowIndex >= 0)
             {
@@ -396,26 +398,6 @@ public class FocusListener : MonoBehaviour
         }
         catch { }
         return IntPtr.Zero;
-    }
-
-    /// <summary>
-    /// Checks if the given row is the same as the last announced row.
-    /// </summary>
-    [HideFromIl2Cpp]
-    private bool IsSameRow(VisualElement tableRow, int rowIndex, IntPtr tablePtr)
-    {
-        // Check by object reference first
-        if (tableRow == _lastAnnouncedTableRow)
-            return true;
-
-        // Then check by index + table combination (handles virtualized lists)
-        if (rowIndex >= 0 && tablePtr != IntPtr.Zero)
-        {
-            return rowIndex == _lastAnnouncedRowIndex &&
-                   tablePtr == _lastAnnouncedTablePtr;
-        }
-
-        return false;
     }
 
     public void OnDestroy()

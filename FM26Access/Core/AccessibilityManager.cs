@@ -132,8 +132,8 @@ public class AccessibilityManager : MonoBehaviour
 
         // === MODIFIER SHORTCUTS (mod-specific features) ===
 
-        // Ctrl+Shift+S - Scan UI (manual trigger)
-        if (ctrlPressed && shiftPressed && keyboard.sKey.wasPressedThisFrame)
+        // Ctrl+Shift+] - Scan UI (manual trigger)
+        if (ctrlPressed && shiftPressed && keyboard.rightBracketKey.wasPressedThisFrame)
         {
             TriggerUIScan();
         }
@@ -232,7 +232,7 @@ public class AccessibilityManager : MonoBehaviour
                    "Enter or Space to activate. " +
                    "Control Shift D to toggle debug mode. " +
                    "Control Shift R to refresh navigation. " +
-                   "Control Shift S to deep scan UI. " +
+                   "Control Shift Right Bracket to deep scan UI. " +
                    "Control Shift W for where am I. " +
                    "Control Shift H for help. " +
                    "Escape to stop speech.";
