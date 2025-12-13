@@ -312,20 +312,20 @@ public class AccessibilityManager : MonoBehaviour
 
     /// <summary>
     /// Activates TableRowNavigatable elements by calling OnNavigationSubmit directly.
-    /// This bypasses SelectionCell callbacks which have null reference issues.
+    /// This handles team/nation selection tables where the game's native Enter doesn't work.
     /// </summary>
     [HideFromIl2Cpp]
     private bool TryDispatchClickEvent(VisualElement element)
     {
         var typeName = TextExtractor.GetIL2CppTypeName(element);
 
+        // TableRowNavigatable handling (for team selection tables)
         if (typeName == "TableRowNavigatable")
         {
             Plugin.Log.LogInfo("Element is TableRowNavigatable, calling OnNavigationSubmit");
 
             try
             {
-                // Cast to TableRowNavigatable and call OnNavigationSubmit directly
                 var tableRow = element.TryCast<TableRowNavigatable>();
                 if (tableRow != null)
                 {
