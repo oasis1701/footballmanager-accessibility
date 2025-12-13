@@ -642,6 +642,110 @@ public class UIScanner : MonoBehaviour
     }
 
     /// <summary>
+    /// Gets the topmost visible container - either an active dialog or the highest layer panel.
+    /// Dialogs are always considered topmost when visible.
+    /// Used by Reading Mode to determine what content to read.
+    /// </summary>
+    [HideFromIl2Cpp]
+    public (VisualElement container, string name, bool isDialog) GetTopmostContainer()
+    {
+        try
+        {
+            var root = GetPanelManagerRoot();
+            if (root == null)
+            {
+                Plugin.Log.LogWarning("GetTopmostContainer: PanelManager root not found");
+                return (null, "", false);
+            }
+
+            // Look for dialog panels first (they appear on top layers)
+            // Dialog panels typically have "Dialog" in their name or type
+            var dialogPanel = FindTopmostDialog(root);
+            if (dialogPanel != null)
+            {
+                var dialogName = dialogPanel.name ?? "Dialog";
+                Plugin.Log.LogInfo($"GetTopmostContainer: Found dialog: {dialogName}");
+                return (dialogPanel, dialogName, true);
+            }
+
+            // Fall back to active panel
+            var (panel, panelName) = GetActivePanel();
+            if (panel != null)
+            {
+                return (panel, panelName, false);
+            }
+
+            // Last resort: use the root itself
+            return (root, "Screen", false);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogError($"GetTopmostContainer failed: {ex}");
+            return (null, "", false);
+        }
+    }
+
+    /// <summary>
+    /// Searches for the topmost visible dialog panel.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private VisualElement FindTopmostDialog(VisualElement root)
+    {
+        try
+        {
+            // Look for panels on higher layers that might be dialogs
+            // FM26 uses layer-based panel stacking
+            var candidates = new System.Collections.Generic.List<(VisualElement element, int layerIndex)>();
+
+            // Search the root for Panel elements
+            SearchForDialogs(root, candidates, 0);
+
+            // Return the one on the highest layer (if any are dialogs)
+            if (candidates.Count > 0)
+            {
+                // Sort by layer index descending
+                candidates.Sort((a, b) => b.layerIndex.CompareTo(a.layerIndex));
+                return candidates[0].element;
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogDebug($"FindTopmostDialog error: {ex.Message}");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Recursively searches for dialog panels.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private void SearchForDialogs(VisualElement element, System.Collections.Generic.List<(VisualElement, int)> candidates, int depth)
+    {
+        if (element == null || depth > 10) return;
+
+        var typeName = TextExtractor.GetIL2CppTypeName(element);
+        var name = element.name?.ToLowerInvariant() ?? "";
+
+        // Check if this looks like a dialog
+        if (element.visible && element.enabledInHierarchy)
+        {
+            if (name.Contains("dialog") || name.Contains("modal") || name.Contains("popup") ||
+                typeName.Contains("Dialog") || typeName.Contains("Modal"))
+            {
+                // Estimate layer from depth or position
+                candidates.Add((element, depth));
+            }
+        }
+
+        // Search children
+        for (int i = 0; i < element.childCount; i++)
+        {
+            SearchForDialogs(element[i], candidates, depth + 1);
+        }
+    }
+
+    /// <summary>
     /// Refreshes navigation for the current active panel.
     /// Waits briefly for bindings to complete before scanning.
     /// </summary>

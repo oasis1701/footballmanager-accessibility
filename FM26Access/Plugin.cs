@@ -36,6 +36,7 @@ public class Plugin : BasePlugin
             ClassInjector.RegisterTypeInIl2Cpp<UIScanner>();
             ClassInjector.RegisterTypeInIl2Cpp<NavigationController>();
             ClassInjector.RegisterTypeInIl2Cpp<FocusListener>();
+            ClassInjector.RegisterTypeInIl2Cpp<ReadingMode>();
             Log.LogInfo("IL2CPP types registered");
 
             // Initialize NVDA output
@@ -58,6 +59,7 @@ public class Plugin : BasePlugin
             _managerObject.AddComponent<UIScanner>();
             _managerObject.AddComponent<NavigationController>();
             _managerObject.AddComponent<FocusListener>();
+            _managerObject.AddComponent<ReadingMode>();
 
             // Apply Harmony patches if needed
             _harmony = new Harmony(MyPluginInfo.PLUGIN_GUID);

@@ -111,6 +111,39 @@ public class AccessibilityManager : MonoBehaviour
         // However, Enter/Space for activation doesn't work reliably on all elements
         // (e.g., radio buttons in team selection), so we handle it manually.
 
+        // === READING MODE ===
+        // Backslash toggles reading mode
+        if (!ctrlPressed && !shiftPressed && keyboard.backslashKey.wasPressedThisFrame)
+        {
+            ToggleReadingMode();
+            return; // Don't process other keys when toggling
+        }
+
+        // When reading mode is active, handle arrow keys for navigation
+        if (ReadingMode.Instance?.IsActive == true)
+        {
+            if (keyboard.upArrowKey.wasPressedThisFrame)
+            {
+                ReadingMode.Instance.NavigateUp();
+                return;
+            }
+            if (keyboard.downArrowKey.wasPressedThisFrame)
+            {
+                ReadingMode.Instance.NavigateDown();
+                return;
+            }
+            if (keyboard.leftArrowKey.wasPressedThisFrame)
+            {
+                ReadingMode.Instance.NavigateLeft();
+                return;
+            }
+            if (keyboard.rightArrowKey.wasPressedThisFrame)
+            {
+                ReadingMode.Instance.NavigateRight();
+                return;
+            }
+        }
+
         // === ACTIVATION KEYS (Enter/Space for element activation) ===
         // Primary: Enter key (without modifiers)
         if (!ctrlPressed && !shiftPressed)
@@ -196,6 +229,21 @@ public class AccessibilityManager : MonoBehaviour
     }
 
     [HideFromIl2Cpp]
+    private void ToggleReadingMode()
+    {
+        var readingMode = ReadingMode.Instance;
+        if (readingMode != null)
+        {
+            readingMode.Toggle();
+        }
+        else
+        {
+            Plugin.Log.LogWarning("ReadingMode instance not found");
+            NVDAOutput.Speak("Reading mode not available");
+        }
+    }
+
+    [HideFromIl2Cpp]
     private void TriggerUIScan()
     {
         Plugin.Log.LogInfo("Manual UI scan triggered");
@@ -230,6 +278,7 @@ public class AccessibilityManager : MonoBehaviour
         var help = "FM26 Access keyboard shortcuts. " +
                    "Navigation: Up and Down arrows to move between elements. " +
                    "Enter or Space to activate. " +
+                   "Backslash to toggle reading mode for non-focusable content. " +
                    "Control Shift D to toggle debug mode. " +
                    "Control Shift R to refresh navigation. " +
                    "Control Shift Right Bracket to deep scan UI. " +

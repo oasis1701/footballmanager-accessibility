@@ -1359,4 +1359,118 @@ public static class TextExtractor
         var withoutEllipsis = text.Replace("...", "").Replace("…", "");
         return withoutEllipsis.Contains(".");
     }
+
+    // =============================================
+    // READING MODE SUPPORT
+    // =============================================
+
+    /// <summary>
+    /// Determines if an element should be included in Reading Mode.
+    /// Includes all text-bearing elements, not just focusable ones.
+    /// </summary>
+    [HideFromIl2Cpp]
+    public static bool IsReadableElement(VisualElement element)
+    {
+        if (element == null) return false;
+
+        var typeName = GetIL2CppTypeName(element);
+
+        // Skip pure container/wrapper elements
+        var name = element.name?.ToLowerInvariant() ?? "";
+        if (IsContainerName(name)) return false;
+
+        // Include text elements
+        if (element is TextElement) return true;
+        if (typeName.Contains("SIText")) return true;
+        if (typeName.Contains("Label")) return true;
+
+        // Include interactive elements (they have labels)
+        if (typeName.Contains("SIButton")) return true;
+        if (typeName.Contains("SICheckBox")) return true;
+        if (typeName.Contains("SIDropdown")) return true;
+        if (typeName.Contains("SIRadioButton")) return true;
+        if (typeName.Contains("SIToggle")) return true;
+        if (element is Button) return true;
+        if (element is Toggle) return true;
+        if (element is DropdownField) return true;
+
+        // Include table cells and rows
+        if (typeName.Contains("TableRowNavigatable")) return true;
+        if (typeName.Contains("StreamedTable")) return true;
+
+        // Check for text content as last resort
+        if (element is TextElement textEl && !string.IsNullOrWhiteSpace(textEl.text))
+            return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Names that indicate container/wrapper elements to skip.
+    /// </summary>
+    private static readonly System.Collections.Generic.HashSet<string> ContainerNames = new()
+    {
+        "container", "wrapper", "root", "content", "body",
+        "unity-content-container", "unity-drag-container",
+        "unity-scrollview__content-container", "unity-scroller"
+    };
+
+    /// <summary>
+    /// Checks if a name indicates a container element.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private static bool IsContainerName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+
+        foreach (var container in ContainerNames)
+        {
+            if (name.Contains(container)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Gets a type hint for a readable element (heading, paragraph, button, etc.)
+    /// Used in Reading Mode announcements.
+    /// </summary>
+    [HideFromIl2Cpp]
+    public static string GetReadableTypeHint(VisualElement element)
+    {
+        if (element == null) return "text";
+
+        var typeName = GetIL2CppTypeName(element);
+        var name = element.name?.ToLowerInvariant() ?? "";
+
+        // Check for headers
+        if (name.Contains("header") || name.Contains("title") || name.Contains("heading"))
+            return "heading";
+
+        // Check CSS classes for header
+        if (element.ClassListContains("header") || element.ClassListContains("title") ||
+            element.ClassListContains("heading") || element.ClassListContains("h1") ||
+            element.ClassListContains("h2") || element.ClassListContains("h3"))
+            return "heading";
+
+        // Interactive element types
+        if (IsCloseButton(element)) return "close button";
+        if (typeName.Contains("SIButton") || element is Button) return "button";
+        if (typeName.Contains("SICheckBox") || element is Toggle) return "checkbox";
+        if (typeName.Contains("SIDropdown") || element is DropdownField) return "dropdown";
+        if (typeName.Contains("SIRadioButton")) return "radio button";
+        if (typeName.Contains("Link") || element.ClassListContains("link")) return "link";
+
+        // Table elements
+        if (typeName.Contains("TableRowNavigatable")) return "table row";
+        if (typeName.Contains("StreamedTable")) return "table";
+
+        // Labels and descriptions
+        if (name.Contains("label") || name.Contains("desc")) return "label";
+
+        // Default for text elements
+        if (element is TextElement) return "text";
+        if (typeName.Contains("SIText")) return "text";
+
+        return "";
+    }
 }
